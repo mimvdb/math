@@ -15,8 +15,8 @@ case class FpxxAccum(o: FpxxAdd.Options) extends Component {
         val op     = slave Stream (Fragment(Fpxx(o.c)))
         val result = master Stream (Fpxx(o.c))
     }
-
-    val adderLatency = LatencyAnalysis(adder.io.op.valid, adder.io.result.valid)
+  val adderResult = adder.io.result.m2sPipe()
+  val adderLatency = LatencyAnalysis(adder.io.op.valid, adderResult.valid)
     assert(adderLatency > 0, "Accumulator only supports pipelined adder")
 
     io.result.payload.setAsReg() init
@@ -24,10 +24,10 @@ case class FpxxAccum(o: FpxxAdd.Options) extends Component {
     // Keep track of the number of in-flight sums in order to reduce them at the end
     val inFlight = Reg(UInt(log2Up(adderLatency + 1) bits)) init 0
 
-    when(adder.io.op.fire && !adder.io.result.fire) {
+    when(adder.io.op.fire && !adderResult.fire) {
         assert(inFlight < adderLatency.intValue() || clockDomain.isResetActive, "inFlight should not overflow")
         inFlight := inFlight + 1
-    } elsewhen (!adder.io.op.fire && adder.io.result.fire) {
+    } elsewhen (!adder.io.op.fire && adderResult.fire) {
         assert(inFlight > 0 || clockDomain.isResetActive, "inFlight should not underflow")
         inFlight := inFlight - 1
     }
@@ -55,8 +55,8 @@ case class FpxxAccum(o: FpxxAdd.Options) extends Component {
                     }
                 }
 
-                when(adder.io.result.valid) {
-                    io.result.payload := adder.io.result
+                when(adderResult.valid) {
+                    io.result.payload := adderResult
                 }
             }
         }
@@ -64,10 +64,10 @@ case class FpxxAccum(o: FpxxAdd.Options) extends Component {
         val reduce = new State {
             whenIsActive {
                 io.op.ready       := False
-                adder.io.op.b     := adder.io.result
+                adder.io.op.b     := adderResult
                 adder.io.op.valid := False
 
-                when(adder.io.result.valid) {
+                when(adderResult.valid) {
                     // Only issue more additions when the accumulator is non-zero
                     // and there are sums in-flight
                     when(inFlight > 0 && !io.result.payload.is_zero()) {
@@ -75,7 +75,7 @@ case class FpxxAccum(o: FpxxAdd.Options) extends Component {
                         io.result.payload.set_zero()
                     } otherwise {
                         // Else the accumulator is empty and we can set it
-                        io.result.payload := adder.io.result
+                        io.result.payload := adderResult
                     }
                 }
 
